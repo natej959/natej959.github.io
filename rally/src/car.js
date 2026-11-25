@@ -124,5 +124,53 @@ function buildCar(THREE, opts) {
     shadow = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 5.6), new THREE.MeshBasicMaterial({ map: st, transparent: true, depthWrite: false }));
     shadow.rotation.x = -Math.PI / 2; shadow.renderOrder = 1;
   }
-  return { root, tilt, body, wheels, flames, driver, shadow };
+  return { root, tilt, body, wheels, flames, driver, shadow, wheelR: 0.58, tail: [[-0.62, 1.1, -2.6], [0.62, 1.1, -2.6]] };
+}
+
+/* ===== CAMO SEDAN (user-supplied low-poly model, wheels split at build time) ===== */
+function buildSedan(THREE, D, opts) {
+  opts = opts || {};
+  const ghost = !!opts.ghost;
+  const geo = (part) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(part.p, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(part.u, 2));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(part.n, 3));
+    return g;
+  };
+  let mat;
+  if (ghost) mat = new THREE.MeshBasicMaterial({ color: 0x7fe9ff, transparent: true, opacity: 0.32, depthWrite: false });
+  else {
+    const tex = new THREE.TextureLoader().load(D.tex); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+    mat = new THREE.MeshLambertMaterial({ map: tex });
+  }
+  const root = new THREE.Group(), tilt = new THREE.Group(), body = new THREE.Group();
+  root.add(tilt); tilt.add(body);
+  body.add(new THREE.Mesh(geo(D.body), mat));
+  const wheels = [];
+  for (const w of D.wheels) {
+    const steer = new THREE.Group(); steer.position.set(w.c[0], w.c[1], w.c[2]); body.add(steer);
+    const spin = new THREE.Group(); steer.add(spin);
+    spin.add(new THREE.Mesh(geo(w), mat));
+    wheels.push({ steer, spin, front: w.front });
+  }
+  // neon underglow + boost flames from the exhaust
+  const flames = [];
+  if (!ghost) {
+    const glow = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 4.0), new THREE.MeshBasicMaterial({ color: 0x35f0ff, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false }));
+    glow.rotation.x = -Math.PI / 2; glow.position.y = 0.06; body.add(glow);
+    for (const s of [-0.45, 0.45]) {
+      const fl = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.9, 6), new THREE.MeshBasicMaterial({ color: 0x78f2ff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+      fl.rotation.x = -Math.PI / 2; fl.position.set(s, 0.35, -2.75); fl.visible = false; body.add(fl); flames.push(fl);
+    }
+  }
+  let shadow = null;
+  if (!ghost) {
+    const sc = document.createElement('canvas'); sc.width = sc.height = 64;
+    const sx = sc.getContext('2d'); const gr = sx.createRadialGradient(32, 32, 4, 32, 32, 31);
+    gr.addColorStop(0, 'rgba(0,0,0,0.6)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); sx.fillStyle = gr; sx.fillRect(0, 0, 64, 64);
+    shadow = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 5.6), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(sc), transparent: true, depthWrite: false }));
+    shadow.renderOrder = 1;
+  }
+  return { root, tilt, body, wheels, flames, driver: new THREE.Group(), shadow, wheelR: 0.29, tail: [[-0.62, 0.62, -2.2], [0.62, 0.62, -2.2]] };
 }

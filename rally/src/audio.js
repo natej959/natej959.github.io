@@ -92,6 +92,7 @@ function createAudio() {
     boostStart() { burst(0.5, 2000, 0.35, 'bandpass'); tone(200, 0.4, 0.12, 'sawtooth', 700); },
     turbo() { burst(0.4, 3500, 0.3, 'bandpass'); tone(300, 0.35, 0.14, 'sawtooth', 900); },
     driftStart() { burst(0.18, 1800, 0.25, 'bandpass'); },
+    boom(p) { burst(0.9, 160 + p * 120, 0.15 + p * 0.65); burst(0.25, 900, 0.12 * p, 'bandpass'); },
     chime() { tone(660, 0.12, 0.15, 'triangle'); setTimeout(() => tone(990, 0.3, 0.15, 'triangle'), 110); },
     best() { [660, 880, 1100, 1320].forEach((f, i) => setTimeout(() => tone(f, 0.25, 0.14, 'triangle'), i * 90)); },
     toggleMute() { muted = !muted; if (master) master.gain.value = muted ? 0 : 0.55; return muted; },

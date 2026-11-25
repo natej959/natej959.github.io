@@ -15,10 +15,11 @@
     brake: 40, reverseMax: 14, coast: 2.5, coastDrag: 0.0012,
     yawBase: 2.1, yawSpeedRef: 28,
     steerRise: 5.5, steerReturn: 8.5, steerCounter: 11,
-    gripNormal: 9.5, gripDrift: 2.0, retainNormal: 0.86, retainDrift: 0.95,
-    driftYawMul: 1.45, driftMinSpeed: 14,
-    boostDrain: 1 / 3.1, boostRegen: 0.042, driftRegen: 0.12,
-    turboTimes: [0.55, 1.05, 1.6], turboAt: [0.7, 1.5, 2.5],
+    gripNormal: 8.2, gripDrift: 1.5, retainNormal: 0.88, retainDrift: 0.975,
+    driftYawMul: 1.75, driftMinSpeed: 15, powerOver: 0.22,
+    autoDriftSteer: 0.8, autoDriftSpeed: 22, snapKick: 0.10, snapKickHand: 0.17, driftRelease: 0.22, spinGuard: 1.15,
+    boostDrain: 1 / 3.1, boostRegen: 0.042, driftRegen: 0.10,
+    turboTimes: [0.5, 0.95, 1.5], turboAt: [0.8, 1.7, 2.8],
     gravityAir: 24, slopeG: 6.5,
   };
 
@@ -32,25 +33,61 @@
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
   let pixelRatio = Math.min(window.devicePixelRatio || 1, 1.75);
   renderer.setPixelRatio(pixelRatio);
-  const FOG = 0xe7c08c;
+  const FOG = 0x2a1636;
   renderer.setClearColor(FOG);
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(FOG, 380, 3400);
+  scene.fog = new THREE.Fog(FOG, 160, 2600);
   const camera = new THREE.PerspectiveCamera(68, 1, 0.12, 9000);
 
-  const hemi = new THREE.HemisphereLight(0xdbe8ff, 0xd29561, 1.6);
+  const hemi = new THREE.HemisphereLight(0x8a8ce0, 0x4a2238, 1.5);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xfff0d4, 2.2);
+  const sun = new THREE.DirectionalLight(0xc8d0ff, 1.5);
   scene.add(sun, sun.target);
 
   const sky = buildSky(THREE, scene);
   sun.position.copy(sky.sunDir).multiplyScalar(100);
-  buildWorld(THREE, scene, T);
+  const world = buildWorld(THREE, scene, T);
+  const war = buildWarZone(THREE, scene, T, world);
 
-  const carObj = buildCar(THREE);
-  scene.add(carObj.root); scene.add(carObj.shadow);
-  const ghostObj = buildCar(THREE, { ghost: true });
-  ghostObj.root.visible = false; scene.add(ghostObj.root);
+  // two cars: the buggy and the camo sedan
+  const CARS = [
+    { name: 'DUNE WARDEN', sub: 'ASSAULT BUGGY', obj: buildCar(THREE), ghost: buildCar(THREE, { ghost: true }) },
+    { name: 'CAMO RUNNER', sub: 'STREET DRIFTER', obj: buildSedan(THREE, SEDAN_MODEL), ghost: buildSedan(THREE, SEDAN_MODEL, { ghost: true }) },
+  ];
+  // headlights (one spot, follows whichever car is active)
+  const head = new THREE.SpotLight(0xdfe8ff, 900, 150, 0.55, 0.5, 1.6);
+  const headTarget = new THREE.Object3D();
+  for (const c of CARS) {
+    scene.add(c.obj.root); scene.add(c.obj.shadow); c.ghost.root.visible = false; scene.add(c.ghost.root);
+  }
+  let carSel = 0;
+  try { carSel = +(localStorage.getItem('dune_warden_car') || 0) % CARS.length; } catch (e) { }
+  let carObj = CARS[carSel].obj, ghostObj = CARS[carSel].ghost;
+  function selectCar(k) {
+    carSel = (k + CARS.length) % CARS.length;
+    for (const c of CARS) { c.obj.root.visible = false; c.obj.shadow.visible = false; c.ghost.root.visible = false; }
+    carObj = CARS[carSel].obj; ghostObj = CARS[carSel].ghost;
+    carObj.root.visible = true; carObj.shadow.visible = true;
+    carObj.tilt.add(head); carObj.tilt.add(headTarget); head.target = headTarget;
+    head.position.set(0, 1.0, 1.8); headTarget.position.set(0, -1, 30);
+    carObj.driver.visible = game ? game.camMode === 0 : true;
+    $('carname').textContent = CARS[carSel].name; $('carsub').textContent = CARS[carSel].sub;
+    try { localStorage.setItem('dune_warden_car', carSel); } catch (e) { }
+    trailReset = true;
+  }
+  let trailReset = true;
+  // light trails from the tail lights
+  const TRAIL = 28;
+  const trailGeo = new THREE.BufferGeometry();
+  const trailPos = new Float32Array(TRAIL * 2 * 2 * 3), trailCol = new Float32Array(TRAIL * 2 * 2 * 3);
+  const trailIdx = [];
+  for (let s = 0; s < 2; s++) for (let k = 0; k < TRAIL - 1; k++) { const a = s * TRAIL * 2 + k * 2; trailIdx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+  trailGeo.setIndex(trailIdx);
+  trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
+  trailGeo.setAttribute('color', new THREE.BufferAttribute(trailCol, 3));
+  const trail = new THREE.Mesh(trailGeo, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+  trail.frustumCulled = false; scene.add(trail);
+  const trailPts = [[], []];
 
   // ------------------------------------------------------------------
   // Track queries
@@ -115,7 +152,7 @@
     car.grounded = true; car.drifting = false; car.driftTime = 0; car.turbo = 0; car.boostOn = false; car.driftDir = 0;
     car.grip = CFG.gripNormal; car.idx = idx; car.speed = 0; car.slip = 0;
     locate(car.x, car.z, idx, -1, L); car.idx = L.i; car.y = L.y + 0.04; car.gy = L.y + 0.04;
-    game.fi = L.i + L.t; game.camSnap = true;
+    game.fi = L.i + L.t; game.camSnap = true; trailReset = true;
   }
   function resetRun() {
     placeOnTrack(START_IDX);
@@ -127,6 +164,7 @@
     ghostObj.root.visible = false;
   }
   resetRun();
+  selectCar(carSel);
 
   // ------------------------------------------------------------------
   // Persistence
@@ -159,8 +197,11 @@
     audio.init();
     if (e.repeat) return;
     keys[e.code] = true;
-    if (e.code === 'Enter' && game.state === 'title') startCountdown();
-    else if (game.state === 'title' && e.code !== 'KeyM') startCountdown();
+    if (game.state === 'title') {
+      if (e.code === 'ArrowLeft' || e.code === 'KeyA') selectCar(carSel - 1);
+      else if (e.code === 'ArrowRight' || e.code === 'KeyD') selectCar(carSel + 1);
+      else if (e.code === 'Enter' || e.code === 'Space' || e.code === 'KeyW' || e.code === 'ArrowUp') startCountdown();
+    }
     if (e.code === 'KeyC') { game.camMode = 1 - game.camMode; game.camSnap = true; carObj.driver.visible = game.camMode === 0; }
     if (e.code === 'KeyM') { const m = audio.toggleMute(); toast(m ? 'SOUND OFF' : 'SOUND ON'); }
     if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
@@ -267,20 +308,30 @@
     const surge = car.boostOn || car.turbo > 0;
 
     if (car.grounded) {
-      // --- drift state machine
-      if (wantDrift && !car.drifting && f > CFG.driftMinSpeed) {
-        car.drifting = true; car.driftTime = 0; car.driftLevel = 0;
-        car.driftDir = Math.abs(car.steer) > 0.15 ? Math.sign(car.steer) : 0;
-        car.bumpV += 2.6; audio.driftStart();
+      // --- drift state machine: any committed steer at speed snaps the tail out
+      const slipAng = Math.atan2(l, Math.max(1, Math.abs(f)));
+      const steerIn = Math.abs(car.steer);
+      if (!car.drifting && f > CFG.driftMinSpeed) {
+        const auto = steerIn > CFG.autoDriftSteer && f > CFG.autoDriftSpeed;
+        const hand = wantDrift && steerIn > 0.12;
+        if (auto || hand) {
+          car.drifting = true; car.driftTime = 0; car.driftLevel = 0; car.releaseT = 0;
+          car.driftDir = Math.sign(car.steer);
+          car.h += car.driftDir * (hand ? CFG.snapKickHand : CFG.snapKick);   // kick the rear out
+          car.yaw = car.driftDir * Math.max(Math.abs(car.yaw), 1.1);
+          car.grip = CFG.gripDrift * 0.6;
+          if (hand) { f *= 0.975; car.bumpV += 2.6; } else car.bumpV += 1.2;
+          audio.driftStart();
+        }
       }
       if (car.drifting) {
-        if (car.driftDir === 0 && Math.abs(car.steer) > 0.25) car.driftDir = Math.sign(car.steer);
-        const slipAng = Math.abs(Math.atan2(l, Math.max(1, f)));
-        if (slipAng > 0.18) car.driftTime += dt;
+        const into = car.steer * car.driftDir;
+        if (into < 0.15 && !wantDrift) car.releaseT += dt; else car.releaseT = 0;
+        if (Math.abs(slipAng) > 0.18) car.driftTime += dt;
         let lvl = 0; for (let k = 0; k < 3; k++) if (car.driftTime > CFG.turboAt[k]) lvl = k + 1;
         if (lvl > car.driftLevel) { car.driftLevel = lvl; audio.chime(); }
         if (f > 20) car.boost = Math.min(1, car.boost + CFG.driftRegen * dt);
-        if (!wantDrift || f < 8) {
+        if (car.releaseT > CFG.driftRelease || f < 9) {
           car.drifting = false;
           if (car.driftLevel > 0) { car.turbo = CFG.turboTimes[car.driftLevel - 1]; audio.turbo(); game.shake = Math.max(game.shake, 0.35); }
           car.driftLevel = 0; car.driftTime = 0;
@@ -310,7 +361,7 @@
       }
       if (f > vmax) f -= ((f - vmax) * 0.6 + 1.2) * dt;
       if (car.offroad) f -= Math.sign(f) * Math.min(Math.abs(f), 3.2 * dt);
-      if (car.drifting) f -= 0.9 * dt;
+      if (car.drifting) f -= 0.5 * dt;
       // gravity along slope
       const al = L.tx * fx + L.tz * fz;
       f -= CFG.slopeG * L.slope * al * dt;
@@ -318,14 +369,21 @@
       // --- yaw
       const af = Math.abs(f);
       const yawMax = CFG.yawBase / (1 + Math.pow(af / CFG.yawSpeedRef, 1.5));
-      let eff = car.steer;
-      if (car.drifting && car.driftDir !== 0) eff = car.driftDir * clamp(0.75 + 0.55 * car.steer * car.driftDir, 0.2, 1.3);
-      let w = eff * yawMax * Math.min(1, af / 5) * (f >= 0 ? 1 : -1);
-      if (car.drifting) w *= CFG.driftYawMul;
-      car.yaw += (w - car.yaw) * damp(24, dt);
-      // --- lateral grip
-      const gTarget = car.drifting ? CFG.gripDrift : CFG.gripNormal - 3.2 * Math.abs(car.steer) * clamp(af / 40, 0, 1);
-      car.grip += (gTarget - car.grip) * damp(car.drifting ? 12 : 7, dt);
+      const slipNow = Math.atan2(l, Math.max(1, af));
+      let w;
+      if (car.drifting) {
+        // steer into the slide to tighten, let go to hold, counter-steer to straighten
+        const into = car.steer * car.driftDir;
+        w = car.driftDir * (clamp(0.7 + 0.75 * into, -0.35, 1.45) * yawMax * CFG.driftYawMul + (thr || surge ? CFG.powerOver : 0));
+        if (Math.abs(slipNow) > CFG.spinGuard && Math.sign(w) === Math.sign(slipNow)) w *= 0.4; // spin guard
+      } else {
+        w = car.steer * yawMax * Math.min(1, af / 5) * (f >= 0 ? 1 : -1);
+      }
+      car.yaw += (w - car.yaw) * damp(car.drifting ? 14 : 24, dt);
+      // --- lateral grip (loose when sliding, ramps back in on exit so there's no snap-back)
+      let gTarget = car.drifting ? CFG.gripDrift : CFG.gripNormal - 3 * Math.abs(car.steer) * clamp(af / 40, 0, 1);
+      if (Math.abs(slipNow) > CFG.spinGuard) gTarget = Math.max(gTarget, 4.5);
+      car.grip += (gTarget - car.grip) * damp(car.drifting ? 12 : 8, dt);
       const sp0 = Math.hypot(f, l);
       const removed = l * (1 - Math.exp(-car.grip * dt));
       l -= removed;
@@ -349,12 +407,13 @@
 
     // --- ground
     locate(car.x, car.z, car.idx, 6, L); car.idx = L.i; car.lat = L.lat;
-    const gy = L.y + 0.04; car.gy = gy;
+    const inGap = T.gap[L.i] === 1;
+    const gy = inGap ? L.y - 400 : L.y + 0.04; car.gy = gy;
     if (car.grounded) {
       const predicted = car.y + car.vy * dt - 0.5 * CFG.gravityAir * dt * dt;
       const speed = Math.hypot(car.vx, car.vz);
       car.gap = Math.max(0, car.gap * 0.9 + (predicted - gy));
-      if (speed > 14 && car.gap > 0.006) {
+      if ((speed > 14 || inGap) && car.gap > 0.006) {
         car.grounded = false; car.gap = 0; car.y = Math.max(predicted, gy); car.vy -= CFG.gravityAir * dt;
       } else { car.vy = (gy - car.y) / dt; car.y = gy; }
     } else {
@@ -397,6 +456,34 @@
         }
       }
       car.vx *= 1 - 0.7 * dt; car.vz *= 1 - 0.7 * dt;               // light scrape drag
+    }
+    // --- fell into the chasm
+    if (!car.grounded && car.y < L.y - 16) {
+      placeOnTrack(T.chasm.end + 3);
+      car.vx = Math.sin(car.h) * 22; car.vz = Math.cos(car.h) * 22;
+      game.shake = 0.6; audio.hit(0.8); toast('TOO SLOW FOR THE JUMP', 'lap');
+    }
+    // --- boost pads
+    car.padCd = Math.max(0, (car.padCd || 0) - dt);
+    if (car.grounded && car.padCd <= 0) {
+      for (const pd of T.pads) {
+        const d = ((car.idx - pd.i) % N + N) % N;
+        if (d <= 3 && Math.abs(car.lat - pd.lat) < 4.8) {
+          car.padCd = 0.7; car.turbo = Math.max(car.turbo, 1.3);
+          const fwd = car.vx * Math.sin(car.h) + car.vz * Math.cos(car.h);
+          const add = Math.max(0, Math.min(14, CFG.vBoost - fwd));
+          car.vx += Math.sin(car.h) * add; car.vz += Math.cos(car.h) * add;
+          audio.turbo(); game.shake = Math.max(game.shake, 0.45); flashFx(0.6, 'pad');
+          break;
+        }
+      }
+    }
+    // --- energy rings top up the boost meter
+    for (const r of world.ringObjs) {
+      const d = ((car.idx - r.i) % N + N) % N;
+      if (d <= 1 && game.lastRing !== r.i) {
+        game.lastRing = r.i; r.flash = 0.6; car.boost = Math.min(1, car.boost + 0.35); audio.chime(); flashFx(0.5, 'ring');
+      }
     }
     car.speed = car.vx * Math.sin(car.h) + car.vz * Math.cos(car.h);
     game.clock += dt;
@@ -541,7 +628,7 @@
     carObj.tilt.rotation.x = car.pitch; carObj.tilt.rotation.z = car.roll;
     carObj.body.position.y = car.bump;
     // wheels
-    const spin = car.speed / 0.58 * dt;
+    const spin = car.speed / carObj.wheelR * dt;
     for (const w of carObj.wheels) { w.spin.rotation.x += spin; if (w.front) w.steer.rotation.y = car.steer * 0.42 + car.yaw * 0.08; }
     // flames
     const fl = car.boostOn || car.turbo > 0;
@@ -552,6 +639,8 @@
     carObj.shadow.rotation.set(-Math.PI / 2, car.h, 0);
     carObj.shadow.material.opacity = clamp(1 - (car.y - car.gy) * 0.12, 0.2, 1);
 
+    // light trails
+    updateTrail(dt);
     // particles
     const fx_ = Math.sin(car.h), fz_ = Math.cos(car.h), rx_ = -fz_, rz_ = fx_;
     const spd = Math.abs(car.speed);
@@ -560,7 +649,7 @@
       while (dustAcc > 1) {
         dustAcc -= 1; const side = Math.random() < 0.5 ? -1 : 1;
         const wx = car.x + rx_ * 1.05 * side - fx_ * 1.45, wz = car.z + rz_ * 1.05 * side - fz_ * 1.45;
-        spawn(wx, car.gy + 0.3, wz, -car.vx * 0.1 + (Math.random() - 0.5) * 2, 0.6 + Math.random() * 1.4, -car.vz * 0.1 + (Math.random() - 0.5) * 2, 0.9 + Math.random() * 0.5, 0.7, 2.4, car.offroad ? 0xd6b27c : 0xe9dcc6, 0.55, -0.4);
+        spawn(wx, car.gy + 0.3, wz, -car.vx * 0.1 + (Math.random() - 0.5) * 2, 0.6 + Math.random() * 1.4, -car.vz * 0.1 + (Math.random() - 0.5) * 2, 0.7 + Math.random() * 0.4, 0.45, 1.6, car.offroad ? 0x6a4a5a : 0x8a7aa0, 0.4, -0.4);
       }
     }
     if (car.drifting && car.driftLevel > 0 && car.grounded) {
@@ -579,6 +668,41 @@
       }
     }
   }
+
+  const _tv = new THREE.Vector3();
+  function updateTrail(dt) {
+    const surge = car.boostOn || car.turbo > 0;
+    const moving = Math.hypot(car.vx, car.vz) > 4 && game.state !== 'title';
+    carObj.tilt.updateMatrixWorld(true);
+    for (let s = 0; s < 2; s++) {
+      const pts = trailPts[s];
+      if (trailReset) pts.length = 0;
+      _tv.fromArray(carObj.tail[s]); carObj.tilt.localToWorld(_tv);
+      const last = pts[0];
+      if (moving && (!last || Math.hypot(_tv.x - last[0], _tv.z - last[2]) > 0.7)) pts.unshift([_tv.x, _tv.y, _tv.z]);
+      else if (!moving && pts.length) pts.pop();
+      if (pts.length) { pts[0][0] = _tv.x; pts[0][1] = _tv.y; pts[0][2] = _tv.z; }
+      if (pts.length > TRAIL) pts.length = TRAIL;
+    }
+    trailReset = false;
+    const c0 = surge ? [0.3, 1.0, 1.0] : (car.drifting ? [1.0, 0.25, 0.75] : [1.0, 0.18, 0.12]);
+    const rx = -Math.cos(car.h) * 0.08, rz = Math.sin(car.h) * 0.08;
+    for (let s = 0; s < 2; s++) {
+      const pts = trailPts[s];
+      for (let k = 0; k < TRAIL; k++) {
+        const p = pts[Math.min(k, pts.length - 1)] || [car.x, car.y, car.z];
+        const fade = pts.length ? Math.max(0, 1 - k / Math.max(1, pts.length - 1)) * (k < pts.length ? 1 : 0) : 0;
+        const o = (s * TRAIL * 2 + k * 2) * 3;
+        const w = 1 - k / TRAIL;
+        trailPos[o] = p[0] + rx * w; trailPos[o + 1] = p[1]; trailPos[o + 2] = p[2] + rz * w;
+        trailPos[o + 3] = p[0] - rx * w; trailPos[o + 4] = p[1]; trailPos[o + 5] = p[2] - rz * w;
+        for (let q = 0; q < 2; q++) { trailCol[o + q * 3] = c0[0] * fade; trailCol[o + q * 3 + 1] = c0[1] * fade; trailCol[o + q * 3 + 2] = c0[2] * fade; }
+      }
+    }
+    trailGeo.attributes.position.needsUpdate = true; trailGeo.attributes.color.needsUpdate = true;
+  }
+  let flashA = 0;
+  function flashFx(a, kind) { flashA = Math.max(flashA, a); $('flash').className = kind || ''; }
 
   function updateCamera(dt) {
     const sp = Math.abs(car.speed), sp01 = clamp(sp / CFG.vBoost, 0, 1);
@@ -601,7 +725,8 @@
       camLook.set(car.x + dx * 9, car.y + 1.5 + car.pitch * -2, car.z + dz * 9);
     } else {
       const fx_ = Math.sin(car.h), fz_ = Math.cos(car.h);
-      camPos.set(car.x - fx_ * 0.1, car.y + car.bump + 1.9, car.z - fz_ * 0.1);
+      const hd = carSel === 0 ? [1.9, -0.1] : [1.22, 0.25];
+      camPos.set(car.x + fx_ * hd[1], car.y + car.bump + hd[0], car.z + fz_ * hd[1]);
       camLook.set(car.x + dx * 14, car.y + 1.55 + car.pitch * -8, car.z + dz * 14);
     }
     // keep camera inside the canyon & above the ground
@@ -710,6 +835,13 @@
     updateCar(dt);
     updateParticles(dt);
     updateCamera(dt);
+    const ev = war.update(dt, camera, car.idx, car);
+    if (ev && game.state !== 'title') {
+      const d = Math.hypot(ev.x - car.x, ev.z - car.z);
+      if (d < 140) { game.shake = Math.max(game.shake, 0.7 * (1 - d / 140) + 0.15); flashFx(0.35 * (1 - d / 140), 'boom'); }
+      audio.boom(clamp(1 - d / 900, 0.05, 1));
+    }
+    flashA = Math.max(0, flashA - dt * 2.2); $('flash').style.opacity = flashA;
     updateGhost();
     const surge = car.boostOn || car.turbo > 0;
     drawFx(dt, game.state === 'race' ? clamp((surge ? 0.6 : 0) + Math.max(0, Math.abs(car.speed) - 50) / 60, 0, 1) : 0);
@@ -728,5 +860,5 @@
   $('loading').style.display = 'none';
   requestAnimationFrame(frame);
 
-  window.__game = { car, game, input, keys, CFG, T, locate, L, resetRun, startCountdown, renderer, camera, scene, physics, FIXED, placeOnTrack, ghostObj };
+  window.__game = { CARS, selectCar, world, car, game, input, keys, CFG, T, locate, L, resetRun, startCountdown, renderer, camera, scene, physics, FIXED, placeOnTrack, ghostObj };
 })();

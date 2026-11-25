@@ -1,5 +1,5 @@
-/* ===== WORLD: canyon mesh, props, sky ===== */
-const HALF_ROAD = 11;       // drivable asphalt-ish width / 2
+/* ===== WORLD: night canyon, neon track, static set pieces ===== */
+const HALF_ROAD = 11;       // drivable road width / 2
 const HALF_FLOOR = 17.2;    // where the canyon wall starts
 const CAR_LIMIT = 15.9;     // car centre can't go past this (wall collision)
 
@@ -12,10 +12,17 @@ function vnoise(x, k) {   // smooth 1D value noise, ~[-1,1]
   const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f);
   return (hash2(i, k) * (1 - u) + hash2(i + 1, k) * u) * 2 - 1;
 }
+function canvasTex(THREE, w, h, draw) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
 
 function buildWorld(THREE, scene, T) {
-  const { N, DS, px, py, pz, stx, stz, kappa, sep } = T;
+  const { N, DS, px, py, pz, stx, stz, kappa, sep, gap, tunnel, pads, rings, chasm } = T;
   const col = (hex) => new THREE.Color(hex);
+  const W = (i) => ((i % N) + N) % N;
+  const inTunnel = (i) => W(i - tunnel[0]) <= W(tunnel[1] - tunnel[0]);
 
   // ---- per-sample outward extent scale (avoid folding / overlapping terrain) ----
   const OUTER_MAX = 150, RIM = 28;
@@ -25,15 +32,14 @@ function buildWorld(THREE, scene, T) {
     const k = kappa[i];
     const inv = Math.abs(k) > 1e-5 ? 0.78 / Math.abs(k) : 1e9;
     const scK = Math.min(1, Math.max(0.04, (inv - RIM) / (OUTER_MAX - RIM)));
-    // k>0 = turning left -> left side is the inner side
     scL[i] = Math.max(0.04, Math.min(sc0, k > 0 ? scK : 1));
     scR[i] = Math.max(0.04, Math.min(sc0, k < 0 ? scK : 1));
   }
   function minBlur(a) {
-    const o = new Float32Array(N), W = 8;
-    for (let i = 0; i < N; i++) { let m = 1; for (let d = -W; d <= W; d++) m = Math.min(m, a[(i + d + N) % N]); o[i] = m; }
+    const o = new Float32Array(N), R = 8;
+    for (let i = 0; i < N; i++) { let m = 1; for (let d = -R; d <= R; d++) m = Math.min(m, a[W(i + d)]); o[i] = m; }
     const o2 = new Float32Array(N);
-    for (let i = 0; i < N; i++) { let s = 0; for (let d = -W; d <= W; d++) s += o[(i + d + N) % N]; o2[i] = s / (2 * W + 1); }
+    for (let i = 0; i < N; i++) { let s = 0; for (let d = -R; d <= R; d++) s += o[W(i + d)]; o2[i] = s / (2 * R + 1); }
     return o2;
   }
   const sL = minBlur(scL), sR = minBlur(scR);
@@ -41,293 +47,355 @@ function buildWorld(THREE, scene, T) {
   let plainY = 1e9; for (let i = 0; i < N; i++) plainY = Math.min(plainY, py[i]);
   plainY -= 7;
 
-  // ---- cross-section rows (lat, relHeight, plainBlend, kind) ----
-  // kind: 0 = floor, 1 = wall, 2 = plateau/outer
+  // cross-section rows (lat, relHeight, plainBlend, kind) - kind 1 = wall, 2 = plateau/outer
   const rows = [
-    [17.2, 0.0, 0, 0],
-    [18.0, 6.0, 0, 1],
-    [19.4, 11.5, 0, 1],
-    [20.0, 18.0, 0, 1],
-    [21.8, 24.0, 0, 1],
-    [22.4, 32.0, 0, 1],
-    [25.5, 37.0, 0, 1],
-    [RIM, 39.0, 0, 2],
-    [46, 41.0, 0.0, 2],
-    [74, 34.0, 0.18, 2],
-    [105, 24.0, 0.55, 2],
-    [OUTER_MAX, 0, 1.0, 2],
+    [17.2, 0.0, 0, 0], [18.0, 6.0, 0, 1], [19.4, 11.5, 0, 1], [20.0, 18.0, 0, 1], [21.8, 24.0, 0, 1],
+    [22.4, 32.0, 0, 1], [25.5, 37.0, 0, 1], [RIM, 39.0, 0, 2], [46, 41.0, 0.0, 2], [74, 34.0, 0.18, 2],
+    [105, 24.0, 0.55, 2], [OUTER_MAX, 0, 1.0, 2],
   ];
-  const strata = [0xb85a32, 0xa44c2b, 0xc86d3d, 0xd7925a, 0x934127, 0xc0612f].map(col);
-  const sandA = col(0xcaa066), sandB = col(0xc29760), plateau = col(0xd9a96d), plateau2 = col(0xcf9d62);
-  const slopeCol = col(0xc99158), slopeCol2 = col(0xd2a06a);
-  const roadA = col(0x6b584c), roadB = col(0x776356), edgeO = col(0xe2762f), edgeW = col(0xe9e1cf);
-  const dash = col(0xcfc4ae), gridK = col(0x1b1b1f), gridW = col(0xeeeeee);
+  // dusk / night palette: deep violet rock with warm strata
+  const strata = [0x5a2a3e, 0x6e3242, 0x4a2238, 0x7c3c48, 0x3e1d33, 0x8a4650].map(col);
+  const plateau = col(0x3a2436), plateau2 = col(0x33203a), slopeCol = col(0x2c1c34), slopeCol2 = col(0x34203a);
+  const sandA = col(0x4a3040), sandB = col(0x42293a);
+  const roadA = col(0x26232e), roadB = col(0x2d2936);
+  const gridK = col(0x111116), gridW = col(0xd8d8e8);
 
-  function sampleRows(i, side) { // returns [{x,y,z,kind}] for rows on one side
-    const j = (i + N) % N;
+  function sampleRows(i, side) {
+    const j = W(i);
     const sx = px[j], sy = py[j], sz = pz[j];
-    const nx = stz[j] * side, nz = -stx[j] * side; // left normal * side
+    const nx = stz[j] * side, nz = -stx[j] * side;
     const sc = side > 0 ? sL[j] : sR[j];
     const out = [];
     for (let r = 0; r < rows.length; r++) {
       let [lat, h, tb, kind] = rows[r];
       let jl = 0, jh = 0;
       if (kind === 1) { jl = vnoise(j * 0.55, r * 7 + (side > 0 ? 0 : 91)) * 0.55; jh = vnoise(j * 0.4, r * 13 + (side > 0 ? 3 : 57)) * 1.4; }
-      if (kind === 2 && r > 7) { jh = vnoise(j * 0.08, r * 11 + (side > 0 ? 5 : 71)) * 5; }
+      if (kind === 2 && r > 7) jh = vnoise(j * 0.08, r * 11 + (side > 0 ? 5 : 71)) * 5;
       if (lat > RIM) lat = RIM + (lat - RIM) * sc;
       lat += jl;
       let y = sy + h + jh;
       if (tb > 0) y = y * (1 - tb) + plainY * tb;
-      out.push({ x: sx + nx * lat, y, z: sz + nz * lat, kind, r });
+      out.push({ x: sx + nx * lat, y, z: sz + nz * lat });
     }
     return out;
   }
 
-  // ---- chunked geometry (frustum culling) ----
-  const CH = 30; // samples per chunk
-  const mat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
-  const chunks = [];
-  let pos, colr, nrm, count;
-  function beginChunk() { pos = []; colr = []; nrm = []; count = 0; }
-  const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _n = new THREE.Vector3();
-  function tri(A, B, C, color, flip) {
-    if (flip) { const t = B; B = C; C = t; }
-    _a.set(B[0] - A[0], B[1] - A[1], B[2] - A[2]); _b.set(C[0] - A[0], C[1] - A[1], C[2] - A[2]);
+  // ---- geometry builders ----
+  const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _n = new THREE.Vector3();
+  function makeBuf() { return { pos: [], nrm: [], col: [], count: 0 }; }
+  function tri(B, A, Bv, C, color, flip) {
+    if (flip) { const t = Bv; Bv = C; C = t; }
+    _a.set(Bv[0] - A[0], Bv[1] - A[1], Bv[2] - A[2]); _b.set(C[0] - A[0], C[1] - A[1], C[2] - A[2]);
     _n.crossVectors(_a, _b).normalize();
-    for (const P of [A, B, C]) { pos.push(P[0], P[1], P[2]); nrm.push(_n.x, _n.y, _n.z); colr.push(color.r, color.g, color.b); }
-    count += 3;
+    for (const P of [A, Bv, C]) { B.pos.push(P[0], P[1], P[2]); B.nrm.push(_n.x, _n.y, _n.z); B.col.push(color.r, color.g, color.b); }
+    B.count += 3;
   }
-  // quad corners in order around; we orient so the normal points up/inward by test vs `up` hint
-  function quad(P0, P1, P2, P3, color, hint) {
-    // P0,P1 along row k at sample i,i+1 ; P3,P2 along row k+1
+  function quad(B, P0, P1, P2, P3, color, hint) {
     _a.set(P1[0] - P0[0], P1[1] - P0[1], P1[2] - P0[2]); _b.set(P3[0] - P0[0], P3[1] - P0[1], P3[2] - P0[2]);
     _n.crossVectors(_a, _b);
     const flip = (_n.x * hint[0] + _n.y * hint[1] + _n.z * hint[2]) < 0;
-    tri(P0, P1, P2, color, flip); tri(P0, P2, P3, color, flip);
+    tri(B, P0, P1, P2, color, flip); tri(B, P0, P2, P3, color, flip);
   }
-  function endChunk() {
-    if (!count) return;
+  function toMesh(B, mat) {
+    if (!B.count) return null;
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
-    g.setAttribute('color', new THREE.Float32BufferAttribute(colr, 3));
+    g.setAttribute('position', new THREE.Float32BufferAttribute(B.pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(B.nrm, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(B.col, 3));
     g.computeBoundingSphere();
-    const m = new THREE.Mesh(g, mat);
-    scene.add(m); chunks.push(m);
+    const m = new THREE.Mesh(g, mat); scene.add(m); return m;
   }
-  const UP = [0, 1, 0];
+  const UP = [0, 1, 0], DOWN = [0, -1, 0];
+  const P = (idx, lat, dy) => { const k = W(idx); return [px[k] + stz[k] * lat, py[k] + (dy || 0), pz[k] - stx[k] * lat]; };
 
+  const rockMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+  const glowMat = new THREE.MeshBasicMaterial({ vertexColors: true, fog: true });
+  const haloMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: true });
+
+  const CYAN = col(0x35f0ff), MAG = col(0xff2fb4), AMBER = col(0xffa21f);
+  const haloC = CYAN.clone().multiplyScalar(0.35), haloM = MAG.clone().multiplyScalar(0.35);
+  const dashC = col(0x3c3a8a);
+  const CH = 30;
   for (let c0 = 0; c0 < N; c0 += CH) {
-    beginChunk();
+    const B = makeBuf(), G = makeBuf(), H = makeBuf();
     for (let i = c0; i < Math.min(N, c0 + CH); i++) {
-      const j = (i + 1) % N;
-      const rowsLi = sampleRows(i, 1), rowsLj = sampleRows(j, 1);
-      const rowsRi = sampleRows(i, -1), rowsRj = sampleRows(j, -1);
-      const P = (idx, lat) => {
-        const k = (idx + N) % N, nx = stz[k], nz = -stx[k];
-        return [px[k] + nx * lat, py[k], pz[k] + nz * lat];
-      };
-      // --- road surface (columns) ---
-      const band = (i >> 1) & 1;
-      const rcol = band ? roadA : roadB;
-      const isGrid = (i === 0 || i === 1);
-      if (isGrid) {
-        const cols = 14, w = HALF_ROAD * 2 / cols;
-        for (let q = 0; q < cols; q++) {
-          const l0 = -HALF_ROAD + q * w, l1 = l0 + w;
-          quad(P(i, l0), P(j, l0), P(j, l1), P(i, l1), ((q + i) & 1) ? gridK : gridW, UP);
+      const j = W(i + 1);
+      const rowsLi = sampleRows(i, 1), rowsLj = sampleRows(j, 1), rowsRi = sampleRows(i, -1), rowsRj = sampleRows(j, -1);
+      if (!gap[i]) {
+        // road
+        const rcol = ((i >> 1) & 1) ? roadA : roadB;
+        if (i === 0 || i === 1) {
+          const cols = 14, w = HALF_ROAD * 2 / cols;
+          for (let q = 0; q < cols; q++) { const l0 = -HALF_ROAD + q * w, l1 = l0 + w; quad(B, P(i, l0), P(j, l0), P(j, l1), P(i, l1), ((q + i) & 1) ? gridK : gridW, UP); }
+        } else {
+          quad(B, P(i, -HALF_ROAD), P(j, -HALF_ROAD), P(j, HALF_ROAD), P(i, HALF_ROAD), rcol, UP);
+          // neon edges (left cyan, right magenta) + soft halos
+          quad(G, P(i, 10.55, 0.03), P(j, 10.55, 0.03), P(j, 10.95, 0.03), P(i, 10.95, 0.03), CYAN, UP);
+          quad(G, P(i, -10.95, 0.03), P(j, -10.95, 0.03), P(j, -10.55, 0.03), P(i, -10.55, 0.03), MAG, UP);
+          quad(H, P(i, 9.2, 0.02), P(j, 9.2, 0.02), P(j, 12.4, 0.02), P(i, 12.4, 0.02), haloC, UP);
+          quad(H, P(i, -12.4, 0.02), P(j, -12.4, 0.02), P(j, -9.2, 0.02), P(i, -9.2, 0.02), haloM, UP);
+          if (((i / 3) | 0) % 2 === 0) quad(G, P(i, -0.14, 0.025), P(j, -0.14, 0.025), P(j, 0.14, 0.025), P(i, 0.14, 0.025), dashC, UP);
         }
+        const sc = ((i >> 2) & 1) ? sandA : sandB;
+        quad(B, P(i, HALF_ROAD), P(j, HALF_ROAD), P(j, HALF_FLOOR), P(i, HALF_FLOOR), sc, UP);
+        quad(B, P(i, -HALF_FLOOR), P(j, -HALF_FLOOR), P(j, -HALF_ROAD), P(i, -HALF_ROAD), sc, UP);
       } else {
-        // road left/right of centre line, centre dashes, edge stripes
-        const dashOn = ((Math.floor(i / 3)) & 1) === 0;
-        quad(P(i, 0.25), P(j, 0.25), P(j, 9.6), P(i, 9.6), rcol, UP);
-        quad(P(i, -9.6), P(j, -9.6), P(j, -0.25), P(i, -0.25), rcol, UP);
-        quad(P(i, -0.25), P(j, -0.25), P(j, 0.25), P(i, 0.25), dashOn ? dash : rcol, UP);
-        const ec = ((i >> 1) & 1) ? edgeO : edgeW;
-        quad(P(i, 9.6), P(j, 9.6), P(j, HALF_ROAD), P(i, HALF_ROAD), ec, UP);
-        quad(P(i, -HALF_ROAD), P(j, -HALF_ROAD), P(j, -9.6), P(i, -9.6), ec, UP);
+        // chasm side walls drop into the abyss
+        for (const side of [1, -1]) {
+          const l = HALF_FLOOR * side, hx = -stz[i] * side, hz = stx[i] * side;
+          quad(B, P(i, l), P(j, l), P(j, l, -160), P(i, l, -160), strata[(i + (side > 0 ? 0 : 3)) % strata.length], [hx, 0, hz]);
+        }
       }
-      // shoulders
-      const sc = ((i >> 2) & 1) ? sandA : sandB;
-      quad(P(i, HALF_ROAD), P(j, HALF_ROAD), P(j, HALF_FLOOR), P(i, HALF_FLOOR), sc, UP);
-      quad(P(i, -HALF_FLOOR), P(j, -HALF_FLOOR), P(j, -HALF_ROAD), P(i, -HALF_ROAD), sc, UP);
+      if (gap[i] && !gap[W(i - 1)]) { // front face of chasm (under the lip)
+        quad(B, P(i, -HALF_FLOOR), P(i, HALF_FLOOR), P(i, HALF_FLOOR, -160), P(i, -HALF_FLOOR, -160), strata[2], [stx[i], 0, stz[i]]);
+      }
+      if (gap[i] && !gap[j]) { // back face (landing side)
+        quad(B, P(j, -HALF_FLOOR), P(j, HALF_FLOOR), P(j, HALF_FLOOR, -160), P(j, -HALF_FLOOR, -160), strata[4], [-stx[i], 0, -stz[i]]);
+      }
+      // tunnel roof
+      if (inTunnel(i) && inTunnel(j)) quad(B, P(i, -20, 16.5), P(j, -20, 16.5), P(j, 20, 16.5), P(i, 20, 16.5), col(0x1c1724), DOWN);
 
-      // walls + plateau, both sides
+      // walls + plateau
       for (const side of [1, -1]) {
-        const A = side > 0 ? rowsLi : rowsRi, B = side > 0 ? rowsLj : rowsRj;
+        const A = side > 0 ? rowsLi : rowsRi, Bq = side > 0 ? rowsLj : rowsRj;
         for (let r = 0; r < rows.length - 1; r++) {
-          const a0 = A[r], b0 = B[r], b1 = B[r + 1], a1 = A[r + 1];
+          const a0 = A[r], b0 = Bq[r], b1 = Bq[r + 1], a1 = A[r + 1];
           const kind = rows[r + 1][3];
           let color;
           if (kind === 1) {
-            const sIdx = Math.floor((r * 3 + (i >> 3) * 1) + hash2(i >> 1, r) * 2.2) % strata.length;
-            const base = strata[(sIdx + strata.length) % strata.length];
-            const v = 0.9 + hash2(i, r + 40) * 0.2;
-            color = base.clone().multiplyScalar(v);
-          } else if (r + 1 === 7) {
-            color = (hash2(i, r) > 0.5 ? plateau : plateau2);
-          } else if (r < 9) {
-            color = (hash2(i >> 1, r) > 0.5 ? plateau : plateau2).clone().multiplyScalar(0.97 + hash2(i, r) * 0.06);
-          } else {
-            color = (hash2(i >> 1, r) > 0.5 ? slopeCol : slopeCol2);
-          }
-          const hx = side > 0 ? -stz[i] : stz[i], hz = side > 0 ? stx[i] : -stx[i]; // inward hint (towards track)
-          const hint = (kind === 1) ? [hx, 0.35, hz] : UP;
-          quad([a0.x, a0.y, a0.z], [b0.x, b0.y, b0.z], [b1.x, b1.y, b1.z], [a1.x, a1.y, a1.z], color, hint);
+            const sIdx = Math.floor((r * 3 + (i >> 3)) + hash2(i >> 1, r) * 2.2) % strata.length;
+            color = strata[sIdx].clone().multiplyScalar(0.85 + hash2(i, r + 40) * 0.3);
+          } else if (r < 9) color = (hash2(i >> 1, r) > 0.5 ? plateau : plateau2);
+          else color = (hash2(i >> 1, r) > 0.5 ? slopeCol : slopeCol2);
+          const hx = side > 0 ? -stz[i] : stz[i], hz = side > 0 ? stx[i] : -stx[i];
+          quad(B, [a0.x, a0.y, a0.z], [b0.x, b0.y, b0.z], [b1.x, b1.y, b1.z], [a1.x, a1.y, a1.z], color, kind === 1 ? [hx, 0.35, hz] : UP);
+        }
+        // glowing strata seam halfway up the wall
+        if (!inTunnel(i) && hash2(i >> 4, side + 9) > 0.35) {
+          const a = A[3], b = Bq[3];
+          const lc = hash2(i >> 4, side) > 0.5 ? AMBER : MAG;
+          const hx = side > 0 ? -stz[i] : stz[i], hz = side > 0 ? stx[i] : -stx[i];
+          quad(G, [a.x + hx * 0.15, a.y, a.z + hz * 0.15], [b.x + hx * 0.15, b.y, b.z + hz * 0.15], [b.x + hx * 0.15, b.y + 0.35, b.z + hz * 0.15], [a.x + hx * 0.15, a.y + 0.35, a.z + hz * 0.15], lc, [hx, 0, hz]);
         }
       }
     }
-    endChunk();
+    toMesh(B, rockMat); toMesh(G, glowMat); toMesh(H, haloMat);
   }
 
-  // ---- base plain ----
-  const plainGeo = new THREE.PlaneGeometry(30000, 30000);
-  plainGeo.rotateX(-Math.PI / 2);
-  const plain = new THREE.Mesh(plainGeo, new THREE.MeshLambertMaterial({ color: 0xd8b07a }));
-  plain.position.y = plainY - 0.2;
-  scene.add(plain);
+  // ---- base plain + abyss glow ----
+  const plainGeo = new THREE.PlaneGeometry(30000, 30000); plainGeo.rotateX(-Math.PI / 2);
+  const plain = new THREE.Mesh(plainGeo, new THREE.MeshLambertMaterial({ color: 0x2a1a30 }));
+  plain.position.y = plainY - 0.2; scene.add(plain);
+  {
+    const c = chasm.lip, h = Math.atan2(stx[c], stz[c]);
+    const mid = P(c + 4.5, 0);
+    const abyss = new THREE.Mesh(new THREE.PlaneGeometry(40, 46), new THREE.MeshBasicMaterial({ color: 0xff3a8a }));
+    abyss.rotation.set(-Math.PI / 2, 0, -h, 'YXZ'); abyss.rotation.set(-Math.PI / 2, h, 0); abyss.rotation.order = 'YXZ';
+    abyss.position.set(mid[0], py[c] - 150, mid[2]); scene.add(abyss);
+    const shaft = new THREE.Mesh(new THREE.BoxGeometry(30, 150, 30), new THREE.MeshBasicMaterial({ color: 0xff2a7a, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false }));
+    shaft.position.set(mid[0], py[c] - 80, mid[2]); shaft.rotation.y = h; scene.add(shaft);
+  }
 
-  // ---- distant mesas ----
-  const mesaMat = new THREE.MeshLambertMaterial({ color: 0xb4623a, flatShading: true });
-  const mesaMat2 = new THREE.MeshLambertMaterial({ color: 0xc27a47, flatShading: true });
-  for (let k = 0; k < 46; k++) {
-    const a = hash2(k, 1) * Math.PI * 2, d = 2300 + hash2(k, 2) * 1900;
-    const h = 90 + hash2(k, 3) * 260, r0 = 70 + hash2(k, 4) * 190;
-    const g = new THREE.CylinderGeometry(r0 * (0.55 + hash2(k, 5) * 0.2), r0, h, 6 + Math.floor(hash2(k, 6) * 3), 2);
-    const m = new THREE.Mesh(g, hash2(k, 7) > 0.5 ? mesaMat : mesaMat2);
-    m.position.set(Math.cos(a) * d * 1.3, plainY + h * 0.5 - 4, Math.sin(a) * d);
-    m.rotation.y = hash2(k, 8) * 6;
+  const M4 = new THREE.Matrix4(), Q = new THREE.Quaternion(), E = new THREE.Euler(), V3 = new THREE.Vector3(), S3 = new THREE.Vector3();
+
+  // ---- scree rocks ----
+  const rockCount = 600;
+  const rocks = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ flatShading: true }), rockCount);
+  const rockCols = [0x4a2534, 0x5c2e3c, 0x3a1d2c, 0x6a3644].map(col);
+  let rc = 0;
+  for (let k = 0; k < rockCount * 2 && rc < rockCount; k++) {
+    const i = Math.floor(hash2(k, 21) * N); if (gap[i] || gap[W(i + 1)]) continue;
+    const side = hash2(k, 22) > 0.5 ? 1 : -1, lat = 16.6 + hash2(k, 23) * 2.4, sz = 0.5 + Math.pow(hash2(k, 24), 2.2) * 2.6;
+    V3.set(px[i] + stz[i] * side * lat, py[i] + sz * 0.35, pz[i] - stx[i] * side * lat);
+    Q.setFromEuler(E.set(hash2(k, 25) * 3, hash2(k, 26) * 6, hash2(k, 27) * 3));
+    S3.set(sz * (0.9 + hash2(k, 28) * 0.6), sz * (0.7 + hash2(k, 29) * 0.5), sz * (0.9 + hash2(k, 30) * 0.6));
+    M4.compose(V3, Q, S3); rocks.setMatrixAt(rc, M4); rocks.setColorAt(rc, rockCols[Math.floor(hash2(k, 31) * rockCols.length)]); rc++;
+  }
+  rocks.count = rc; scene.add(rocks);
+
+  // ---- chevron boards on sharp bends (glowing) ----
+  const chevTex = canvasTex(THREE, 128, 128, (cx) => {
+    cx.fillStyle = '#0d0b14'; cx.fillRect(0, 0, 128, 128);
+    cx.strokeStyle = '#ffb02e'; cx.lineWidth = 16; cx.shadowColor = '#ff8a00'; cx.shadowBlur = 10;
+    for (const oy of [-26, 8, 42]) { cx.beginPath(); cx.moveTo(34, 28 + oy); cx.lineTo(88, 62 + oy); cx.lineTo(34, 96 + oy); cx.stroke(); }
+  });
+  const chevList = [];
+  for (let i = 0; i < N; i += 3) if (Math.abs(kappa[i]) > 1 / 115 && !gap[i]) chevList.push([i, kappa[i] > 0 ? -1 : 1, kappa[i] > 0 ? 1 : -1]);
+  const chev = new THREE.InstancedMesh(new THREE.PlaneGeometry(3.4, 3.4), new THREE.MeshBasicMaterial({ map: chevTex, side: THREE.DoubleSide }), Math.max(1, chevList.length));
+  chevList.forEach(([i, side, dir], n) => {
+    const nx = stz[i] * side, nz = -stx[i] * side;
+    V3.set(px[i] + nx * 16.9, py[i] + 2.4, pz[i] + nz * 16.9);
+    Q.setFromEuler(E.set(0, Math.atan2(-nx, -nz), 0)); S3.set(dir * side > 0 ? 1 : -1, 1, 1);
+    M4.compose(V3, Q, S3); chev.setMatrixAt(n, M4);
+  });
+  chev.count = chevList.length; scene.add(chev);
+
+  // ---- tunnel ribs ----
+  {
+    const ribs = []; for (let i = tunnel[0]; inTunnel(i) && ribs.length < 40; i += 3) ribs.push(W(i));
+    const n = ribs.length;
+    const pil = new THREE.InstancedMesh(new THREE.BoxGeometry(1.4, 16.5, 1.4), new THREE.MeshLambertMaterial({ color: 0x2b2a36, flatShading: true }), n * 2);
+    const beam = new THREE.InstancedMesh(new THREE.BoxGeometry(37, 1.4, 1.6), new THREE.MeshLambertMaterial({ color: 0x2b2a36, flatShading: true }), n);
+    const strip = new THREE.InstancedMesh(new THREE.BoxGeometry(33, 0.25, 0.5), new THREE.MeshBasicMaterial({ color: 0xffffff }), n);
+    const vstrip = new THREE.InstancedMesh(new THREE.BoxGeometry(0.25, 14, 0.25), new THREE.MeshBasicMaterial({ color: 0xffffff }), n * 2);
+    ribs.forEach((i, k) => {
+      const h = Math.atan2(stx[i], stz[i]); Q.setFromEuler(E.set(0, h, 0)); S3.set(1, 1, 1);
+      const c = k % 2 ? MAG : CYAN;
+      for (const s of [0, 1]) {
+        const p = P(i, s ? 16.6 : -16.6, 8.25); V3.set(p[0], p[1], p[2]); M4.compose(V3, Q, S3); pil.setMatrixAt(k * 2 + s, M4);
+        const q = P(i, s ? 15.8 : -15.8, 7.5); V3.set(q[0], q[1], q[2]); M4.compose(V3, Q, S3); vstrip.setMatrixAt(k * 2 + s, M4); vstrip.setColorAt(k * 2 + s, c);
+      }
+      const b = P(i, 0, 15.8); V3.set(b[0], b[1], b[2]); M4.compose(V3, Q, S3); beam.setMatrixAt(k, M4);
+      V3.y -= 0.8; M4.compose(V3, Q, S3); strip.setMatrixAt(k, M4); strip.setColorAt(k, c);
+    });
+    scene.add(pil, beam, strip, vstrip);
+  }
+
+  // ---- boost pads (one merged mesh, scrolling chevron texture) ----
+  const padTex = canvasTex(THREE, 64, 128, (cx, w, h) => {
+    cx.fillStyle = '#000'; cx.fillRect(0, 0, w, h);
+    cx.strokeStyle = '#6ff6ff'; cx.lineWidth = 10; cx.shadowColor = '#00e1ff'; cx.shadowBlur = 8;
+    for (const oy of [10, 74]) { cx.beginPath(); cx.moveTo(8, oy + 40); cx.lineTo(32, oy + 12); cx.lineTo(56, oy + 40); cx.stroke(); }
+  });
+  padTex.wrapS = padTex.wrapT = THREE.RepeatWrapping;
+  {
+    const pos = [], uv = [];
+    for (const pd of pads) {
+      const a = pd.i, b = W(pd.i + 3);
+      const A0 = P(a, pd.lat - 4.2, 0.06), A1 = P(a, pd.lat + 4.2, 0.06), B0 = P(b, pd.lat - 4.2, 0.06), B1 = P(b, pd.lat + 4.2, 0.06);
+      pos.push(...A0, ...B0, ...B1, ...A0, ...B1, ...A1);
+      uv.push(0, 0, 0, 1.5, 1, 1.5, 0, 0, 1, 1.5, 1, 0);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ map: padTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
     scene.add(m);
   }
 
-  // ---- scree rocks (instanced) ----
-  const rockGeo = new THREE.IcosahedronGeometry(1, 0);
-  const rockCount = 700;
-  const rocks = new THREE.InstancedMesh(rockGeo, new THREE.MeshLambertMaterial({ flatShading: true }), rockCount);
-  const M4 = new THREE.Matrix4(), Q = new THREE.Quaternion(), E = new THREE.Euler(), V3 = new THREE.Vector3(), S3 = new THREE.Vector3();
-  const rockCols = [0x8f4a2d, 0xa5603a, 0x7b4430, 0xb8794a].map(col);
-  for (let k = 0; k < rockCount; k++) {
-    const i = Math.floor(hash2(k, 21) * N), side = hash2(k, 22) > 0.5 ? 1 : -1;
-    const lat = 16.6 + hash2(k, 23) * 2.4, sz = 0.5 + Math.pow(hash2(k, 24), 2.2) * 2.6;
-    const nx = stz[i] * side, nz = -stx[i] * side;
-    V3.set(px[i] + nx * lat, py[i] + sz * 0.35, pz[i] + nz * lat);
-    E.set(hash2(k, 25) * 3, hash2(k, 26) * 6, hash2(k, 27) * 3); Q.setFromEuler(E);
-    S3.set(sz * (0.9 + hash2(k, 28) * 0.6), sz * (0.7 + hash2(k, 29) * 0.5), sz * (0.9 + hash2(k, 30) * 0.6));
-    M4.compose(V3, Q, S3); rocks.setMatrixAt(k, M4);
-    rocks.setColorAt(k, rockCols[Math.floor(hash2(k, 31) * rockCols.length)]);
-  }
-  scene.add(rocks);
-
-  // ---- beacon posts (speed reference) ----
-  const postN = Math.floor(N / 20);
-  const postGeo = new THREE.BoxGeometry(0.5, 4.5, 0.5);
-  const postMat = new THREE.MeshLambertMaterial({ color: 0x3a3f4a, flatShading: true });
-  const posts = new THREE.InstancedMesh(postGeo, postMat, postN * 2);
-  const tipGeo = new THREE.BoxGeometry(0.62, 0.7, 0.62);
-  const tips = new THREE.InstancedMesh(tipGeo, new THREE.MeshBasicMaterial({ color: 0x5fe8ff }), postN * 2);
-  for (let k = 0; k < postN; k++) {
-    const i = (k * 20 + 7) % N;
-    for (let s = 0; s < 2; s++) {
-      const side = s ? -1 : 1, lat = 14.2;
-      const nx = stz[i] * side, nz = -stx[i] * side;
-      V3.set(px[i] + nx * lat, py[i] + 2.25, pz[i] + nz * lat);
-      Q.setFromEuler(E.set(0, Math.atan2(stx[i], stz[i]), 0)); S3.set(1, 1, 1);
-      M4.compose(V3, Q, S3); posts.setMatrixAt(k * 2 + s, M4);
-      V3.y += 2.6; M4.compose(V3, Q, S3); tips.setMatrixAt(k * 2 + s, M4);
+  // ---- energy rings over the road ----
+  const ringObjs = rings.map((i, k) => {
+    const g = new THREE.Group();
+    const h = Math.atan2(stx[i], stz[i]);
+    g.position.set(px[i], py[i] + 9.5, pz[i]); g.rotation.y = h;
+    const spin = new THREE.Group(); g.add(spin);
+    const cA = k % 2 ? 0xff3fc0 : 0x3ff6ff;
+    spin.add(new THREE.Mesh(new THREE.TorusGeometry(15.5, 0.8, 6, 28), new THREE.MeshBasicMaterial({ color: cA })));
+    spin.add(new THREE.Mesh(new THREE.TorusGeometry(15.5, 2.6, 6, 28), new THREE.MeshBasicMaterial({ color: cA, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false })));
+    const segMat = new THREE.MeshLambertMaterial({ color: 0x2a2833, flatShading: true });
+    for (let s = 0; s < 6; s++) {
+      const a = s / 6 * Math.PI * 2;
+      const seg = new THREE.Mesh(new THREE.BoxGeometry(3.2, 3.2, 3.2), segMat);
+      seg.position.set(Math.cos(a) * 15.5, Math.sin(a) * 15.5, 0); seg.rotation.z = a; spin.add(seg);
     }
-  }
-  scene.add(posts, tips);
-
-  // ---- chevron boards on sharp bends ----
-  const cc = document.createElement('canvas'); cc.width = 128; cc.height = 128;
-  const cx = cc.getContext('2d');
-  cx.fillStyle = '#16181d'; cx.fillRect(0, 0, 128, 128);
-  cx.fillStyle = '#ffb02e';
-  cx.strokeStyle = '#ffb02e'; cx.lineWidth = 16; cx.lineJoin = 'miter';
-  for (const oy of [-26, 8, 42]) { cx.beginPath(); cx.moveTo(34, 28 + oy); cx.lineTo(88, 62 + oy); cx.lineTo(34, 96 + oy); cx.stroke(); }
-  const chevTex = new THREE.CanvasTexture(cc); chevTex.colorSpace = THREE.SRGBColorSpace;
-  const chevList = [];
-  for (let i = 0; i < N; i += 3) {
-    const k = kappa[i];
-    if (Math.abs(k) > 1 / 115) chevList.push([i, k > 0 ? -1 : 1, k > 0 ? 1 : -1]); // outside of bend
-  }
-  const chev = new THREE.InstancedMesh(new THREE.PlaneGeometry(3.4, 3.4), new THREE.MeshBasicMaterial({ map: chevTex, side: THREE.DoubleSide }), Math.max(1, chevList.length));
-  chevList.forEach(([i, side, dir], n) => {
-    const lat = 16.9;
-    const nx = stz[i] * side, nz = -stx[i] * side;
-    V3.set(px[i] + nx * lat, py[i] + 2.4, pz[i] + nz * lat);
-    // face towards the track centre
-    const yaw = Math.atan2(-nx, -nz);
-    Q.setFromEuler(E.set(0, yaw, 0));
-    S3.set(dir * side > 0 ? 1 : -1, 1, 1);
-    M4.compose(V3, Q, S3); chev.setMatrixAt(n, M4);
+    scene.add(g);
+    return { g, spin, i, flash: 0 };
   });
-  chev.count = chevList.length;
-  scene.add(chev);
+
+  // ---- rim pylons with sky beams ----
+  const pyl = [];
+  for (let i = 30; i < N; i += 70) if (!gap[i]) for (const side of [1, -1]) if (hash2(i, side) > 0.3) pyl.push([i, side]);
+  const pylon = new THREE.InstancedMesh(new THREE.CylinderGeometry(1.2, 2.4, 26, 6), new THREE.MeshLambertMaterial({ color: 0x24222e, flatShading: true }), pyl.length);
+  const beams = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.9, 0.9, 700, 6, 1, true), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }), pyl.length);
+  const caps = new THREE.InstancedMesh(new THREE.OctahedronGeometry(2.4, 0), new THREE.MeshBasicMaterial({ color: 0xffffff }), pyl.length);
+  pyl.forEach(([i, side], k) => {
+    const rows0 = sampleRows(i, side), r = rows0[8];
+    const c = hash2(i, 5) > 0.5 ? CYAN : MAG;
+    Q.identity(); S3.set(1, 1, 1);
+    V3.set(r.x, r.y + 13, r.z); M4.compose(V3, Q, S3); pylon.setMatrixAt(k, M4);
+    V3.set(r.x, r.y + 27, r.z); M4.compose(V3, Q, S3); caps.setMatrixAt(k, M4); caps.setColorAt(k, c);
+    V3.set(r.x, r.y + 377, r.z); M4.compose(V3, Q, S3); beams.setMatrixAt(k, M4); beams.setColorAt(k, c.clone().multiplyScalar(0.6));
+  });
+  scene.add(pylon, beams, caps);
+
+  // ---- crashed capital ship inside the loop ----
+  {
+    let cx = 0, cz = 0; for (let i = 0; i < N; i++) { cx += px[i]; cz += pz[i]; } cx /= N; cz /= N;
+    let minD = 1e9; for (let i = 0; i < N; i++) minD = Math.min(minD, Math.hypot(px[i] - cx, pz[i] - cz));
+    const S = Math.min(1, (minD - 60) / 300);
+    const ship = new THREE.Group();
+    const hull = new THREE.MeshLambertMaterial({ color: 0x4a4858, flatShading: true });
+    const dark = new THREE.MeshLambertMaterial({ color: 0x2a2833, flatShading: true });
+    const add = (geo, m, x, y, z, rx, ry, rz) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.rotation.set(rx || 0, ry || 0, rz || 0); ship.add(o); return o; };
+    add(tbox(THREE, 200, 46, 0, 8, 14, 10, 560), hull, 0, 0, 0);             // dagger hull, nose +z
+    add(tbox(THREE, 150, 30, 46, 10, 6, 22, 420), dark, 0, 0, -50);           // upper deck
+    add(tbox(THREE, 70, 50, 76, 50, 40, 76, 90), hull, 0, 0, -200);           // tower base
+    add(new THREE.BoxGeometry(120, 14, 30), dark, 0, 132, -210);              // bridge
+    for (const s of [-1, 1]) add(new THREE.BoxGeometry(8, 8, 360), dark, s * 70, 24, -30, 0, s * 0.18, 0);
+    const winMat = new THREE.MeshBasicMaterial({ color: 0xffc879 });
+    for (let k = 0; k < 40; k++) add(new THREE.BoxGeometry(6, 1.6, 1), winMat, (hash2(k, 1) - 0.5) * 120, 50 + hash2(k, 2) * 22, 70 - hash2(k, 3) * 300);
+    const eng = new THREE.MeshBasicMaterial({ color: 0x7ff6ff });
+    for (const [x, y] of [[-60, 20], [0, 26], [60, 20]]) add(new THREE.CylinderGeometry(16, 16, 4, 10), eng, x, y, -282, Math.PI / 2, 0, 0);
+    ship.scale.setScalar(S);
+    ship.rotation.set(0.22, 0.9, 0.12);
+    ship.position.set(cx, plainY + 40 * S, cz);
+    scene.add(ship);
+  }
 
   // ---- start / finish gantry ----
   const g = new THREE.Group();
-  const slate = new THREE.MeshLambertMaterial({ color: 0x353b46, flatShading: true });
-  const bone = new THREE.MeshLambertMaterial({ color: 0xd9d4c6, flatShading: true });
-  const orange = new THREE.MeshLambertMaterial({ color: 0xe2762f, flatShading: true });
-  const glow = new THREE.MeshBasicMaterial({ color: 0x63ecff });
+  const slate = new THREE.MeshLambertMaterial({ color: 0x2a2f3a, flatShading: true });
+  const glowC = new THREE.MeshBasicMaterial({ color: 0x35f0ff }), glowM = new THREE.MeshBasicMaterial({ color: 0xff2fb4 });
   const add = (geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); g.add(o); return o; };
   for (const sx of [-14.2, 14.2]) {
     add(new THREE.BoxGeometry(1.8, 11, 1.8), slate, sx, 5.5, 0);
-    add(new THREE.BoxGeometry(2.0, 1.4, 2.0), orange, sx, 1.0, 0);
-    add(new THREE.BoxGeometry(0.4, 9, 0.4), glow, sx * 0.93 + (sx > 0 ? 0.3 : -0.3), 5.5, 1.0);
+    add(new THREE.BoxGeometry(0.4, 10, 0.4), sx > 0 ? glowC : glowM, sx * 0.93 + (sx > 0 ? 0.3 : -0.3), 5.5, 1.0);
   }
   add(new THREE.BoxGeometry(31, 1.6, 2.4), slate, 0, 10.8, 0);
-  add(new THREE.BoxGeometry(31, 0.35, 0.5), glow, 0, 9.85, 0.6);
-  const bc = document.createElement('canvas'); bc.width = 1024; bc.height = 128;
-  const bx = bc.getContext('2d');
-  bx.fillStyle = '#14161b'; bx.fillRect(0, 0, 1024, 128);
-  for (let q = 0; q < 32; q++) for (let r = 0; r < 4; r++) { bx.fillStyle = ((q + r) & 1) ? '#f2f2f2' : '#14161b'; bx.fillRect(q * 32, r * 8, 32, 8); for (let r2 = 0; r2 < 4; r2++) { bx.fillRect(q * 32, 96 + r2 * 8, 32, 8); } }
-  bx.fillStyle = '#e2762f'; bx.font = 'bold 56px Arial Black, Arial, sans-serif'; bx.textAlign = 'center'; bx.textBaseline = 'middle';
-  bx.fillText('START  /  FINISH', 512, 64);
-  const bt = new THREE.CanvasTexture(bc); bt.colorSpace = THREE.SRGBColorSpace;
+  add(new THREE.BoxGeometry(31, 0.35, 0.5), glowC, 0, 9.85, 0.6);
+  const bt = canvasTex(THREE, 1024, 128, (bx) => {
+    bx.fillStyle = '#0c0b12'; bx.fillRect(0, 0, 1024, 128);
+    for (let q = 0; q < 32; q++) for (let r = 0; r < 4; r++) { bx.fillStyle = ((q + r) & 1) ? '#e8e8f8' : '#0c0b12'; bx.fillRect(q * 32, r * 8, 32, 8); bx.fillRect(q * 32, 96 + r * 8, 32, 8); }
+    bx.fillStyle = '#35f0ff'; bx.shadowColor = '#35f0ff'; bx.shadowBlur = 14; bx.font = 'bold 56px Arial Black, Arial, sans-serif'; bx.textAlign = 'center'; bx.textBaseline = 'middle';
+    bx.fillText('START  /  FINISH', 512, 64);
+  });
   const banner = new THREE.Mesh(new THREE.PlaneGeometry(30, 3.75), new THREE.MeshBasicMaterial({ map: bt }));
   banner.position.set(0, 10.8, 1.25); g.add(banner);
   const banner2 = banner.clone(); banner2.position.z = -1.25; banner2.rotation.y = Math.PI; g.add(banner2);
-  // orient so the gantry's local +z follows track direction; its x runs left-right
-  const h0 = Math.atan2(stx[0], stz[0]);
-  g.position.set(px[0], py[0], pz[0]); g.rotation.y = h0;
-  g.updateMatrixWorld(true);
+  g.position.set(px[0], py[0], pz[0]); g.rotation.y = Math.atan2(stx[0], stz[0]);
   scene.add(g);
 
-  return { plainY, chunks };
+  return { plainY, padTex, ringObjs, sampleRows };
 }
 
-/* ===== SKY ===== */
+/* ===== SKY: night, stars, ringed gas giant ===== */
 function buildSky(THREE, scene) {
-  const geo = new THREE.SphereGeometry(5000, 20, 12);
+  const geo = new THREE.SphereGeometry(5000, 24, 14);
   const colors = [], p = geo.attributes.position;
-  const top = new THREE.Color(0x2f67ad), mid = new THREE.Color(0x8fb8d8), hor = new THREE.Color(0xf0c58f), below = new THREE.Color(0xe3b985);
+  const top = new THREE.Color(0x05061a), mid = new THREE.Color(0x1e1446), hor = new THREE.Color(0x8a2c6a), below = new THREE.Color(0x24122e);
   const c = new THREE.Color();
   for (let i = 0; i < p.count; i++) {
     const y = p.getY(i) / 5000;
-    if (y > 0.25) c.copy(mid).lerp(top, Math.min(1, (y - 0.25) / 0.6));
-    else if (y > 0) c.copy(hor).lerp(mid, y / 0.25);
-    else c.copy(hor).lerp(below, Math.min(1, -y * 4));
+    if (y > 0.2) c.copy(mid).lerp(top, Math.min(1, (y - 0.2) / 0.5));
+    else if (y > 0) c.copy(hor).lerp(mid, y / 0.2);
+    else c.copy(hor).lerp(below, Math.min(1, -y * 5));
     colors.push(c.r, c.g, c.b);
   }
   geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   const sky = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false }));
-  sky.renderOrder = -10;
-  scene.add(sky);
+  sky.renderOrder = -10; scene.add(sky);
 
   const grp = new THREE.Group();
-  // big pale moon + a smaller one, low-poly
-  const moon = new THREE.Mesh(new THREE.IcosahedronGeometry(260, 1), new THREE.MeshBasicMaterial({ color: 0xe6e1d6, fog: false }));
-  moon.position.set(-2400, 1500, -3500);
-  const moon2 = new THREE.Mesh(new THREE.IcosahedronGeometry(90, 1), new THREE.MeshBasicMaterial({ color: 0xd9b8a0, fog: false }));
-  moon2.position.set(1800, 1700, -3800);
-  const ring = new THREE.Mesh(new THREE.RingGeometry(330, 470, 40), new THREE.MeshBasicMaterial({ color: 0xcfc7b4, fog: false, side: THREE.DoubleSide, transparent: true, opacity: 0.55 }));
-  ring.position.copy(moon.position); ring.rotation.set(1.2, 0.25, 0.4);
-  const sun = new THREE.Mesh(new THREE.CircleGeometry(150, 14), new THREE.MeshBasicMaterial({ color: 0xfff4d6, fog: false }));
-  const sdir = new THREE.Vector3(0.55, 0.42, 0.72).normalize();
-  sun.position.copy(sdir).multiplyScalar(4600); sun.lookAt(0, 0, 0);
-  grp.add(moon, moon2, ring, sun);
+  // stars
+  const sp = [];
+  for (let k = 0; k < 1800; k++) {
+    const u = hash2(k, 401), v = hash2(k, 402) * 0.95 + 0.05;
+    const a = u * Math.PI * 2, y = v, r = Math.sqrt(1 - y * y);
+    sp.push(Math.cos(a) * r * 4600, y * 4600, Math.sin(a) * r * 4600);
+  }
+  const sg = new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3));
+  grp.add(new THREE.Points(sg, new THREE.PointsMaterial({ color: 0xdfe6ff, size: 2, sizeAttenuation: false, fog: false })));
+  // banded gas giant
+  const pg = new THREE.IcosahedronGeometry(820, 2), pc = [], pp = pg.attributes.position;
+  const bands = [0xc0577a, 0xe08a6a, 0x9a3f6e, 0xf2b37a, 0x7a3060].map((h) => new THREE.Color(h));
+  for (let i = 0; i < pp.count; i++) { const b = bands[Math.floor((pp.getY(i) / 820 + 1) * 4.6) % bands.length]; pc.push(b.r, b.g, b.b); }
+  pg.setAttribute('color', new THREE.Float32BufferAttribute(pc, 3));
+  const planet = new THREE.Mesh(pg, new THREE.MeshBasicMaterial({ vertexColors: true, fog: false }));
+  planet.position.set(-1900, 1500, -3300);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(1050, 1550, 48), new THREE.MeshBasicMaterial({ color: 0xffb8d8, fog: false, side: THREE.DoubleSide, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }));
+  ring.position.copy(planet.position); ring.rotation.set(1.25, 0.3, 0.5);
+  const moon = new THREE.Mesh(new THREE.IcosahedronGeometry(120, 1), new THREE.MeshBasicMaterial({ color: 0xbfd4ff, fog: false }));
+  moon.position.set(2200, 1900, -3200);
+  grp.add(planet, ring, moon);
   scene.add(grp);
-  return { sky, grp, sunDir: sdir };
+  return { sky, grp, sunDir: new THREE.Vector3(2200, 1900, -3200).normalize() };
 }

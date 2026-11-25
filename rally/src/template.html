@@ -7,7 +7,7 @@
 <style>
   :root { --cyan:#63ecff; --orange:#ff7a1f; --bone:#e9e1cf; --ink:rgba(12,14,19,.72); }
   * { box-sizing:border-box; margin:0; padding:0; }
-  html,body { width:100%; height:100%; overflow:hidden; background:#e7c08c; color:var(--bone);
+  html,body { width:100%; height:100%; overflow:hidden; background:#2a1636; color:var(--bone);
     font-family:"Bahnschrift","DIN Alternate","Arial Narrow","Segoe UI",system-ui,sans-serif; user-select:none; -webkit-user-select:none; }
   canvas#c { position:fixed; inset:0; display:block; }
   canvas#fx { position:fixed; inset:0; pointer-events:none; }
@@ -54,6 +54,13 @@
   kbd { display:inline-block; background:#232833; border:1px solid #4a5263; border-bottom-width:3px; padding:1px 8px; font:600 13px/1.5 inherit; color:#fff; margin-right:4px; min-width:26px; text-align:center; }
   .go { font-size:18px; letter-spacing:.25em; color:var(--orange); font-weight:700; animation:pulse 1s infinite alternate; }
   @keyframes pulse { to { opacity:.45; } }
+  #flash { position:fixed; inset:0; pointer-events:none; opacity:0; background:radial-gradient(ellipse at 50% 60%, rgba(255,160,60,.0) 30%, rgba(255,140,40,.55) 100%); }
+  #flash.pad { background:radial-gradient(ellipse at 50% 60%, rgba(60,240,255,0) 30%, rgba(60,240,255,.6) 100%); }
+  #flash.ring { background:radial-gradient(ellipse at 50% 60%, rgba(255,60,190,0) 30%, rgba(255,60,190,.55) 100%); }
+  .carsel { display:flex; align-items:center; gap:14px; margin:4px 0 22px; }
+  .carsel .arrow { font-size:26px; color:var(--cyan); font-weight:800; }
+  .carsel .cn { font-size:26px; font-style:italic; font-weight:800; color:#fff; letter-spacing:.06em; min-width:250px; text-align:center; }
+  .carsel .cs { font-size:11px; letter-spacing:.35em; color:var(--orange); text-align:center; }
   #pause { display:none; } #loading { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:#14110d; color:var(--orange); font-size:22px; letter-spacing:.4em; z-index:9; }
   .small { font-size:12px; color:#9a9486; margin-top:14px; letter-spacing:.06em; line-height:1.5; }
   #nogl { display:none; position:fixed; inset:0; align-items:center; justify-content:center; background:#14110d; color:#e9e1cf; font-size:18px; z-index:10; text-align:center; padding:30px; }
@@ -63,6 +70,7 @@
 <canvas id="c"></canvas>
 <canvas id="fx"></canvas>
 <div id="vig"></div>
+<div id="flash"></div>
 
 <div class="panel" id="timer">
   <div id="lap">READY</div>
@@ -83,16 +91,18 @@
 
 <div class="overlay" id="title"><div class="card">
   <h1>DUNE <span>WARDEN</span></h1>
-  <div class="sub">CANYON TIME TRIAL · SINGLE LAP RECORD</div>
+  <div class="sub">WAR-ZONE CANYON · NIGHT TIME TRIAL</div>
+  <div class="carsel"><span class="arrow">◀</span><div><div class="cn" id="carname">DUNE WARDEN</div><div class="cs" id="carsub">ASSAULT BUGGY</div></div><span class="arrow">▶</span></div>
   <div class="keys">
     <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></div><div>Throttle / steer / brake &amp; reverse (arrow keys work too)</div>
-    <div><kbd>SPACE</kbd></div><div>Drift. Hold it into a corner, steer to tighten or widen the slide. Longer drifts store a mini-turbo.</div>
+    <div><kbd>STEER</kbd></div><div>Commit to a turn at speed and the tail snaps out. Steer in to tighten, let go to hold, counter-steer to straighten. Long slides store a mini-turbo.</div>
+    <div><kbd>SPACE</kbd></div><div>Handbrake flick: bigger, harder snap into the drift.</div>
     <div><kbd>SHIFT</kbd></div><div>Boost. Drains the meter, drifting refills it.</div>
     <div><kbd>R</kbd></div><div>Tap to respawn on the road. Hold to restart the run.</div>
     <div><kbd>C</kbd></div><div>Chase / hood camera</div>
   </div>
-  <div class="go">PRESS ANY KEY TO START</div>
-  <div class="small">Timer starts when you cross the gantry. Your best lap is saved and raced as a ghost.</div>
+  <div class="go">◀ ▶ PICK CAR · ENTER TO START</div>
+  <div class="small">Timer starts at the gantry. Cyan chevrons are boost pads, rings refill boost. The chasm jump needs speed: hit the pad before the ramp. Best lap is saved and raced as a ghost.</div>
 </div></div>
 <div class="overlay" id="pause"><div class="card"><h1>PAUSED</h1><div class="sub">PRESS P OR ESC TO RESUME</div></div></div>
 <div id="loading">LOADING CANYON</div>

@@ -61,15 +61,17 @@ function buildTrackData(THREE) {
   }
   // Small jump crests, placed on the straightest stretch near each target so a launch
   // never lands in a hairpin.
-  const bumps = [];
-  for (const [f, A, w] of [[0.17, 3.3, 17], [0.46, 3.0, 16], [0.71, 3.4, 17], [0.90, 2.8, 16]]) {
+  const W = (i) => ((i % N) + N) % N;
+  function straightest(f, span, before, after) {
     let bestI = Math.floor(f * N), bestK = 1e9;
-    for (let c = Math.floor((f - 0.06) * N); c <= Math.floor((f + 0.06) * N); c++) {
-      let mk = 0; for (let d = -20; d <= 28; d++) mk = Math.max(mk, Math.abs(kappa[((c + d) % N + N) % N]));
-      if (mk < bestK) { bestK = mk; bestI = ((c % N) + N) % N; }
+    for (let c = Math.floor((f - span) * N); c <= Math.floor((f + span) * N); c++) {
+      let mk = 0; for (let d = -before; d <= after; d++) mk = Math.max(mk, Math.abs(kappa[W(c + d)]));
+      if (mk < bestK) { bestK = mk; bestI = W(c); }
     }
-    bumps.push([bestI * DS, A, w]);
+    return bestI;
   }
+  const bumps = [];
+  for (const [f, A, w] of [[0.17, 3.3, 17], [0.42, 3.0, 16], [0.90, 2.8, 16]]) bumps.push([straightest(f, 0.05, 20, 28) * DS, A, w]);
   for (const [c, A, w] of bumps) {
     for (let i = 0; i < N; i++) {
       let d = Math.abs(i * DS - c); d = Math.min(d, N * DS - d);
@@ -82,9 +84,36 @@ function buildTrackData(THREE) {
     py.set(ys);
   }
 
+  // ---- Chasm jump: kicker ramp, then a 36 m gap with nothing under it ----
+  const CH = straightest(0.68, 0.05, 22, 26);
+  const gap = new Uint8Array(N);
+  for (let d = -12; d <= 0; d++) { const k = (d + 12) / 12; py[W(CH + d)] += 4.2 * k * k; }
+  for (let d = 0; d <= 8; d++) gap[W(CH + d)] = 1;          // segments CH..CH+8 have no floor
+  const chasm = { lip: CH, end: W(CH + 9) };
+  // ---- Tunnel ----
+  const tA = W(Math.floor(0.30 * N)), tunnel = [tA, W(tA + 55)];
+  const inRange = (i, a, len) => { const d = W(i - a); return d <= len; };
+  // ---- Boost pads (one always feeds the chasm ramp) ----
+  const pads = [{ i: W(CH - 26), lat: 0 }];
+  const padLat = [0, -5, 5, -4, 4, 0, -5, 5];
+  for (let k = 0; k < 8; k++) {
+    const i = straightest((k + 0.55) / 8.6, 0.02, 4, 10);
+    if (inRange(i, W(CH - 40), 60) || inRange(i, W(tA - 6), 70) || W(i) < 12 || W(i) > N - 14) continue;
+    pads.push({ i, lat: padLat[k] });
+  }
+  // ---- Floating energy rings ----
+  const rings = [];
+  for (let k = 0; k < 7; k++) {
+    const i = straightest((k + 0.62) / 7, 0.03, 6, 6);
+    if (inRange(i, W(CH - 20), 40) || inRange(i, W(tA - 4), 64) || pads.some((p) => Math.min(W(p.i - i), W(i - p.i)) < 10)) continue;
+    rings.push(i);
+  }
+
   // slope along s (dy/ds), central difference
   const slope = new Float32Array(N);
   for (let i = 0; i < N; i++) slope[i] = (py[(i + 1) % N] - py[(i + N - 1) % N]) / (2 * DS);
+  slope[chasm.lip] = (py[chasm.lip] - py[W(chasm.lip - 1)]) / DS;     // keep the kicker lip sharp
+  slope[chasm.end] = (py[W(chasm.end + 1)] - py[chasm.end]) / DS;
 
   // Separation from non-adjacent track (used to keep outer terrain from overlapping)
   const sep = new Float32Array(N).fill(9999);
@@ -100,5 +129,5 @@ function buildTrackData(THREE) {
     sep[i] = best;
   }
 
-  return { DS, N, length: N * DS, px, py, pz, tx, tz, segLen, stx, stz, kappa, slope, sep };
+  return { DS, N, length: N * DS, px, py, pz, tx, tz, segLen, stx, stz, kappa, slope, sep, gap, chasm, tunnel, pads, rings };
 }

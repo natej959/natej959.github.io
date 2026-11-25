@@ -12,7 +12,10 @@ let three = read('vendor/three.min.js');
 three = three.replace(/^console\.warn\([^\n]*\),\n/, 'void 0,\n');
 if (three.includes('</script')) throw new Error('three.min.js contains </script');
 
-const game = ['track.js', 'world.js', 'car.js', 'audio.js', 'game.js'].map(read).join('\n');
+const { convertSedan } = await import('./model.mjs');
+const sedan = convertSedan(join(here, 'assets/sedan.obj'));
+sedan.tex = 'data:image/png;base64,' + readFileSync(join(here, 'assets/sedan_military.png')).toString('base64');
+const game = ['const SEDAN_MODEL = ' + JSON.stringify(sedan) + ';', ...['track.js', 'world.js', 'car.js', 'scifi.js', 'audio.js', 'game.js'].map(read)].join('\n');
 if (game.includes('</script')) throw new Error('game code contains </script');
 
 const html = read('template.html')
